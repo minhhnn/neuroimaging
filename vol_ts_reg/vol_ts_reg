@@ -1,0 +1,309 @@
+#! /usr/bin/env perl
+#
+# Andrew Janke - a.janke@gmail.com
+# Center for Magnetic Resonancse
+# The University of Queensland
+#
+# Copyright Andrew Janke, The University of Queensland.
+# Permission to use, copy, modify, and distribute this software and its
+# documentation for any purpose and without fee is hereby granted,
+# provided that the above copyright notice appear in all copies.  The
+# author and the University of Queensland make no representations about the
+# suitability of this software for any purpose.  It is provided "as is"
+# without express or implied warranty.
+
+$| = 1;
+
+
+use strict;
+use warnings "all";
+use Getopt::Tabular;
+use File::Basename;
+use File::Temp qw/ tempdir /;
+
+my($Help, $Usage, $me, @opt_table, %opt);
+my(@args, @files, %inprefix, %outprefix, %current_fn, %current_xfm, $outfile);
+
+$me = &basename($0);
+%opt = ('verbose' => 0,
+   'quiet' => 0,
+   'clobber' => 0,
+   'fake' => 0,
+   'tmpdir' => undef,
+   
+   'blur' => 0,
+   'iterations' => 2,
+   'avgxfms' => 0,
+   
+   'keep_avg' => 0,
+   'keep_xfm' => 1,
+   'keep_reg' => 0,
+   'jpg' => 0,
+   
+   'avg_prefix' => "vol_ts_reg-$$",
+   'reg_ext' => 'ts_reg',
+   'fit_args' => '-xcorr -lsq6 -simplex 10',
+   'outdir' => '',
+   );
+
+$Help = <<HELP;
+| $me is designed to align a series of MINC files within themselves.
+|
+| It does this by recursively registering each of 
+| the files to their own evolving internal average.
+|
+| The number of fits is specified by -iterations.
+| The first iteration fits each of the data sets to the first.
+| Subsequent iterations fit each of the data sets to an average
+|   generated from registration results of the previous iteration. 
+| As such at least 2 iterations are suggested.
+| 
+| PS: Yes, in the first iteration the first image is registered
+|   to itself, this IMHO is required to reduce some possible effects
+|   of registration bias.
+|
+| Problems or comments should be sent to: a.janke\@gmail.com
+HELP
+
+$Usage = "Usage: $me [options] <in1.mnc> [<in2.mnc> [...]]\n".
+         "       $me -help to list options\n\n";
+
+@opt_table = (
+   ["-verbose", "boolean", 0, \$opt{verbose},
+      "be verbose" ],
+   ["-quiet", "boolean", 0, \$opt{quiet},
+      "be vewwy quiet (wabbits probably)" ],
+   ["-clobber", "boolean", 0, \$opt{clobber},
+      "clobber existing files" ],
+   ["-fake", "boolean", 0, \$opt{fake},
+      "do a dry run, (echo cmds only)" ],
+   ["-tmpdir", "string", 1, \$opt{tmpdir},
+      "temporary directory to use" ],
+
+   ["-blur", "boolean", 0, \$opt{blur},
+      "blur the data before registration" ],
+   ["-iterations", "integer", 1, \$opt{iterations},
+      "The number of iterative fits to perform." ],
+   ["-avgxfms", "boolean", 0, \$opt{avgxfms},
+      "average xfms after each iteration" ],
+      
+   ["-keep_avg", "boolean", 0, \$opt{keep_avg},
+      "keep average images" ],
+   ["-keep_xfm", "boolean", 0, \$opt{keep_xfm},
+      "keep average transforms" ],
+   ["-keep_reg", "boolean", 0, \$opt{keep_reg},
+      "keep (final) resampled files" ],
+   ["-jpg", "boolean", 0, \$opt{jpg},
+      "create a series of evolving check jpgs" ],
+   
+   ["-avg_prefix", "string",  1, \$opt{avg_prefix},
+      "prefix for average images <avg_prefix>.avg_xx.mnc" ],
+   ["-reg_ext", "string",  1, \$opt{reg_ext}, 
+      "String to use for registered files xxx.<reg_ext>.mnc" ],
+   ["-fit_args", "string",  1, \$opt{fit_args}, 
+      "args to pass to minctracc" ],
+   ["-outdir", "string",  1, \$opt{outdir}, 
+      "where to place all output files [Default: input dir]" ],
+   );
+
+# Check arguments
+&Getopt::Tabular::SetHelp($Help, $Usage);
+&GetOptions(\@opt_table, \@ARGV) || exit 1;
+die $Usage if ($#ARGV < 0);
+
+# make tmpdir
+if(defined($opt{tmpdir})){
+   # just in case
+   &do_cmd('mkdir', '-p', $opt{tmpdir});
+   $opt{tmpdir} = &tempdir( "$me-XXXXXXXX", DIR => $opt{tmpdir}, CLEANUP => 1 );
+   }
+else{
+   $opt{tmpdir} = &tempdir( "$me-XXXXXXXX", TMPDIR => 1, CLEANUP => 1 );
+   }
+
+# check for infiles and create files array
+print STDOUT "+ INFILES\n" if !$opt{quiet};
+foreach (@ARGV){
+   my($prefix, $base);
+   
+   # check for .gz
+   if(!-e $_){
+      $_ .= '.gz';
+      if(!-e $_){
+         die "$me: Couldn't find file: $_\n";
+         }
+      }
+      
+   $base = &basename($_);
+   $prefix = &dirname($_);
+   $base =~ s/\.mnc(\.gz)*//;
+   
+   # sanity check
+   if(defined($inprefix{$base})){
+      die "$me: two base filenames are the same!  ($base.mnc)\n";
+      }
+   
+   # setup our file array and hashes
+   push(@files, $base);
+   $inprefix{$base} = $prefix;
+   $outprefix{$base} = ($opt{outdir} eq '') ? $prefix : $opt{outdir};
+   $current_fn{$base} = $_;
+   
+   print STDOUT "| $inprefix{$base} / $base\n" if !$opt{quiet};
+   }
+
+# create the output directory if required
+if($opt{outdir} ne ''){
+   if(!-e $opt{outdir}){
+      &do_cmd('mkdir', '-p', $opt{outdir});
+      }
+   }
+
+
+# do the blurring step
+if($opt{blur}){
+   my(%step, $k, @tmp, %kern, $max_step);
+   
+   print STDOUT "+ Estimating blurring Kernel\n" if !$opt{quiet};
+   
+   # figure out the blurring kernel
+   @args = ('mincinfo',
+           '-attvalue', 'zspace:step',
+           '-attvalue', 'yspace:step',
+           '-attvalue', 'xspace:step',
+           "$inprefix{$files[0]}/$files[0].mnc");
+   ($step{'z'}, $step{'y'}, $step{'x'}) = split("\n", `@args`);
+   
+   # get absolute value
+   foreach $k (sort keys(%step)){
+      $step{$k} = abs($step{$k});
+      }
+
+   # get the max step
+   @tmp = sort(values(%step));
+   $max_step = pop @tmp;
+
+   # ascertain the correct blurring kernel
+   foreach $k (sort keys(%step)){
+# CURRENTLY FWHM is hard-coded to 2mm
+#      $kern{$k} = ($step{$k} < $max_step) ? $max_step : $step{$k};
+      $kern{$k} = 2;
+       
+      print STDOUT "| $k: $step{$k}\t->\t$kern{$k}\n" if !$opt{quiet};
+      }
+   
+   # blur the data
+   print STDOUT "+ Blurring\n" if !$opt{quiet};
+   foreach (@files){
+      print STDOUT "| $_\n" if !$opt{quiet};
+      $outfile = "$opt{tmpdir}/$_";
+      &do_cmd('mincblur', '-clobber', 
+              '-3dfwhm', $kern{'x'}, $kern{'y'}, $kern{'z'},
+              $current_fn{$_}, $outfile);
+      
+      # store the filename
+      $current_fn{$_} = "$outfile\_blur.mnc";
+      }
+   }
+
+# iterate until done
+my($iter, $iter_txt, $xfm, $target, $sdtarget, @avg_files);
+for($iter = 0; $iter < $opt{iterations}; $iter++){
+   $iter_txt = sprintf("%02d", $iter);
+   
+   print STDOUT "+ Iteration $iter_txt/$opt{iterations}\n" if !$opt{'quiet'};
+   
+   # set up target for registration if we are on the first iteration
+   if($iter == 0){
+      $target = $current_fn{$files[0]};
+      }
+   
+   # clear variables for the next iteration
+   undef(@avg_files);
+   undef(%current_xfm);
+   
+   # perform the registrations to the current target
+   foreach (@files){
+      print STDOUT "| [$iter_txt] $_\n" if !$opt{'quiet'};
+   
+      # xfm filename
+      $current_xfm{$_} = ($iter == $opt{'iterations'} - 1 && $opt{'keep_xfm'}) ?
+         "$outprefix{$_}/$_.$opt{reg_ext}.xfm" :
+         "$opt{tmpdir}/$_.$opt{reg_ext}\_$iter_txt.xfm";
+      
+      # create transformation
+      &do_cmd('minctracc', '-clobber',
+              split(/\ /, $opt{fit_args}),
+              $current_fn{$_}, $target, $current_xfm{$_} );
+      }
+   
+   # average the xfms if required
+   if($opt{avgxfms}){
+      
+      my($avg_xfm, $avg_xfm_inv, $new_fn);
+      
+      # set up file names
+      $avg_xfm = "$opt{tmpdir}/average-xfm\_$iter_txt.xfm";
+      $avg_xfm_inv = "$opt{tmpdir}/average-xfm\_$iter_txt.inv.xfm";
+      
+      # first get the average xfm
+      &do_cmd('xfmavg', '-clobber', (values %current_xfm), $avg_xfm);
+      
+      # then invert it
+      &do_cmd('xfminvert', $avg_xfm, $avg_xfm_inv);
+      
+      # generate the new xfms
+      foreach (values(%current_xfm)){
+         
+         # set up new filename
+         $new_fn = $_;
+         $new_fn =~ s/\.xfm$/\.avg\.xfm/;
+         
+         # concatenate the original + inverse of the average
+         &do_cmd('xfmconcat', $_, $avg_xfm_inv, $new_fn);
+         
+         $_ = $new_fn;
+         }
+      }
+   
+   # resample
+   foreach (@files){
+      
+      # outfile filename
+      $outfile = ($iter == $opt{iterations} - 1 && $opt{keep_reg}) ?
+         "$outprefix{$_}/$_.$opt{reg_ext}.mnc" :
+         "$opt{tmpdir}/$_.$opt{reg_ext}\_$iter_txt.mnc";
+      
+      # Add this one to list of files for the next average
+      push(@avg_files, $outfile);
+      
+      &do_cmd('mincresample', '-clobber',
+              '-like', $target,
+              '-transformation', $current_xfm{$_},
+              $current_fn{$_}, $outfile);
+         
+      # create check jpg
+      &do_cmd('mincpik', '-clobber', 
+              $outfile, 
+              "$outprefix{$_}/$_.$opt{reg_ext}\_$iter_txt.jpg") if $opt{jpg};
+      }
+   
+   # create average
+   $target = ($opt{'keep_avg'}) ? 
+      "$outprefix{$files[0]}/$opt{avg_prefix}.avg_$iter_txt.mnc" : 
+      "$opt{tmpdir}/$opt{avg_prefix}.avg_$iter_txt.mnc";
+   $sdtarget = ($opt{'keep_avg'}) ? 
+      "$outprefix{$files[0]}/$opt{avg_prefix}.std_$iter_txt.mnc" : 
+      "$opt{tmpdir}/$opt{avg_prefix}.std_$iter_txt.mnc";
+   &do_cmd('mincaverage', '-clobber',
+      '-sdfile', $sdtarget,
+      @avg_files, $target);
+   }
+
+
+sub do_cmd {
+   print STDOUT "@_\n" if $opt{'verbose'};
+   if(!$opt{'fake'}){
+      system(@_) == 0 or die "\n$me: Failed executing @_\n\n";
+      }
+   }
