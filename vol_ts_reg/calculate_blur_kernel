@@ -1,0 +1,48 @@
+#! /usr/bin/env perl
+#
+# Andrew Janke - a.janke@gmail.com
+# Center for Magnetic Resonancse
+# The University of Queensland
+#
+# Copyright Andrew Janke, The University of Queensland.
+# Permission to use, copy, modify, and distribute this software and its
+# documentation for any purpose and without fee is hereby granted,
+# provided that the above copyright notice appear in all copies.  The
+# author and the University of Queensland make no representations about the
+# suitability of this software for any purpose.  It is provided "as is"
+# without express or implied warranty.
+
+   my($filename, %step, $k, @tmp, %kern, $max_step);
+   $filename = $ARGV[0];
+   print STDOUT "+ Estimating blurring Kernel\n"; #if !$opt{quiet};
+   
+   # figure out the blurring kernel
+   @args = ('mincinfo',
+           '-attvalue', 'zspace:step',
+           '-attvalue', 'yspace:step',
+           '-attvalue', 'xspace:step',
+           "$filename");
+   ($step{'z'}, $step{'y'}, $step{'x'}) = split("\n", `@args`);
+   
+   # get absolute value
+   foreach $k (sort keys(%step)){
+      $step{$k} = abs($step{$k});
+      }
+
+   # get the max step
+   @tmp = sort(values(%step));
+   $max_step = pop @tmp;
+
+   # ascertain the correct blurring kernel
+   foreach $k (sort keys(%step)){
+# CURRENTLY FWHM is hard-coded to 2mm
+#      $kern{$k} = ($step{$k} < $max_step) ? $max_step : $step{$k};
+      $kern{$k} = 2;
+       
+      print STDOUT "| $k: $step{$k}\t->\t$kern{$k}\n" #if !$opt{quiet};
+      }
+
+sub do_cmd {
+   print STDOUT "@_\n"; #if $opt{'verbose'};
+   system(@_) == 0 or die "\n: Failed executing @_\n\n";
+   }   

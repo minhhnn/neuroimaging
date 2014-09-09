@@ -1,0 +1,33 @@
+#! /usr/bin/env perl
+#
+# Andrew Janke - a.janke@gmail.com
+# Center for Magnetic Resonancse
+# The University of Queensland
+#
+# Copyright Andrew Janke, The University of Queensland.
+# Permission to use, copy, modify, and distribute this software and its
+# documentation for any purpose and without fee is hereby granted,
+# provided that the above copyright notice appear in all copies.  The
+# author and the University of Queensland make no representations about the
+# suitability of this software for any purpose.  It is provided "as is"
+# without express or implied warranty.
+
+my($filename, %kern);
+$filename = $ARGV[0];
+$kern{'x'} = $ARGV[1];
+$kern{'y'} = $ARGV[2];
+$kern{'z'} = $ARGV[3];
+
+print STDOUT "| $_\n"; #if !$opt{quiet};
+      $outfile = "blurredfile";
+      &do_cmd('mincblur', '-clobber', 
+              '-3dfwhm', $kern{'x'}, $kern{'y'}, $kern{'z'},
+              $filename, $outfile);
+      
+      # store the filename
+      $filename = "$outfile";
+
+sub do_cmd {
+   print STDOUT "@_\n"; #if $opt{'verbose'};
+   system(@_) == 0 or die "\n: Failed executing @_\n\n";
+   }
