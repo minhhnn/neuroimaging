@@ -12,20 +12,26 @@
 # suitability of this software for any purpose.  It is provided "as is"
 # without express or implied warranty.
 
-my($filename, %kern);
+my($filename, %kern, $blur_required);
 $filename = $ARGV[0];
 $kern{'x'} = $ARGV[1];
 $kern{'y'} = $ARGV[2];
 $kern{'z'} = $ARGV[3];
+$blur_required = $ARGV[4];
 
-print STDOUT "| $_\n"; #if !$opt{quiet};
+if (($blur_required eq 'yes') || ($blur_required eq 'y')){
+
+	print STDOUT "| $_\n"; #if !$opt{quiet};
       $outfile = "blurredfile";
       &do_cmd('mincblur', '-clobber', 
               '-3dfwhm', $kern{'x'}, $kern{'y'}, $kern{'z'},
               $filename, $outfile);
       
       # store the filename
-      $filename = "$outfile";
+      #$filename = "$outfile";
+	&do_cmd('mv', "$outfile\_blur.mnc", $filename);
+	print STDOUT 'blurring';
+}
 
 sub do_cmd {
    print STDOUT "@_\n"; #if $opt{'verbose'};
