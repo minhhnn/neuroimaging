@@ -1,0 +1,37 @@
+#! /usr/bin/env perl
+#
+# Andrew Janke - a.janke@gmail.com
+# Center for Magnetic Resonancse
+# The University of Queensland
+#
+# Copyright Andrew Janke, The University of Queensland.
+# Permission to use, copy, modify, and distribute this software and its
+# documentation for any purpose and without fee is hereby granted,
+# provided that the above copyright notice appear in all copies.  The
+# author and the University of Queensland make no representations about the
+# suitability of this software for any purpose.  It is provided "as is"
+# without express or implied warranty.
+
+# outfile filename
+      my ($orginalfile, $infile, $target, $outfile, $jpg);
+      $orginalfile = $ARGV[0];
+      $infile = $ARGV[1];
+      $target = $ARGV[2];
+      $jpg = $ARGV[3];
+      $outfile = "rsmpl.mnc";
+      
+      &do_cmd('mincresample', '-clobber',
+              '-like', $target,
+              '-transformation', $infile,
+              $orginalfile, $outfile);
+         
+      # create check jpg
+      &do_cmd('mincpik', '-clobber', 
+              $outfile, 
+              "rsmpl.jpg") if $jpg;
+      
+
+sub do_cmd {
+   print STDOUT "@_\n"; #if $opt{'verbose'};
+   system(@_) == 0 or die "\n: Failed executing @_\n\n";
+   }
